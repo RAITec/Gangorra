@@ -7,17 +7,21 @@
 #define motorLeft 26
 #define motorRight 25
 
-
+//INTERVALO DE TEMPO ENTRE OS LOOP'S
 int dt = 1;
 
+
+//ACESSO A MPU / GYROSCOPIO
 Adafruit_MPU6050 mpu;
 bool calibration = false;
 
+//VARIÁVEIS NECESSÁRIAS PARA UTILIZAR O GYROSCOPIO
 float AngleRoll = 0, RateRoll = 0, RateCalibrationRoll = 0;
 float KalmanAngleRoll  = 0, KalmanUncertaintyAngleRoll  = 2*2;
+//KALMAN ANGLE ROLL É O ANGULO ATUAL
 
-
-
+//CONFIGURAÇÃO DA MPU, NECESSÁRIO PARA UTILIZALA
+//UTILIZE NA FUNÇÃO SETUP
 void MPUconfigSetup() 
 {
 	if (!mpu.begin()) 
@@ -33,6 +37,8 @@ void MPUconfigSetup()
 	mpu.setFilterBandwidth(MPU6050_BAND_10_HZ);  //5Hz, 10Hz, 21Hz, 44Hz, 94Hz, 184Hz, 260Hz
 }
 
+//CALIBRAÇÃO PARA SETAR O ESTADO INICIAL DA MPU.
+//DESCOBRIR O ANGULO INICIAL DA MPU
 void CalibrarMPU()
 {
  	for (int Passo = 0 ; Passo < 2000; Passo++) 
@@ -49,6 +55,9 @@ void CalibrarMPU()
 	
 }
 
+
+//FUNÇÃO COLOCADA NA LOOP, NECESSÁRIA PARA DESCOBRIR O ANGULO ATUAL DO GYROSCOPIO
+//POR CONSEQUENCIA, DA GANGORRA/BALANÇA
 void MPUgetSignalsLoop() 
 {	
   sensors_event_t a, g, temp;
@@ -73,6 +82,8 @@ void MPUgetSignalsLoop()
   Kalman1D(KalmanAngleRoll, KalmanUncertaintyAngleRoll, RateRoll, AngleRoll); 
 }
 
+
+//FILTRO UTILIZADO PARA DESCOBRIR O ANGULO ATUAL COM POUCOS RUÍDOS
 void Kalman1D(float &KalmanState,float &KalmanUncertainty, const float &KalmanInput, 
 					           const float &KalmanMeasurement)
 {
@@ -90,7 +101,8 @@ void Kalman1D(float &KalmanState,float &KalmanUncertainty, const float &KalmanIn
 
 
 
-
+//FUNÇÃO NECESSÁRIA PARA USAR OS MOTORES
+//DEVE SER USADA NA SETUP
 void setupPWM(const int &freq, const int &resolution, const int &pin, const int &ch)
 {
   pinMode(pin, OUTPUT); // Definição do pino de saída do PWM de controle do motor
@@ -98,6 +110,7 @@ void setupPWM(const int &freq, const int &resolution, const int &pin, const int 
   ledcAttachPin(pin, ch); // Funções para definição do PWM na ESP32
 }
 
+//SETA OS VALORES DE VELOCIDADE NOS MOTORES
 void controlSpeed(int &speed, int ch)
 {
 	// Função para controlar a velocidade dos motores
@@ -106,6 +119,11 @@ void controlSpeed(int &speed, int ch)
 }
 
 
+//*****************************************************************************************************************
+//
+//  ESSE TRECHO DE CÓDIGO É NECESSÁRIO PARA FAZER O CONTROLE DA GANGORRA, ASSIM SENDO, HÁ OS TERMOS DE ERRO ATUAL 
+//  E ANTERIOR, ASSIM COMO O ERRO INTEGRATIVO E VARIÁVEIS QUE SÃO NECESSÁRIAS PARA O CONTROLADOR.
+//
 //*****************************************************************************************************************
 
 double timer;
@@ -129,17 +147,22 @@ double gyro_const = 1;
 
 //1000000
 
+//LIMITES PARA OS PARAMETROS DE ENTRADA, POIS SE NÃO HOUVER, REFLETE MENOS O PARAMETROS FÍSICOS E PODE DANIFICAR
+//OS DISPOSITIVOS
 double Ulimit = 20;
 double Ilimit = Ulimit;
 double Dlimit = Ulimit;
 double RPMlimit = 15;
 
+
+//VARIÁVEIS PARA OS MOTORES E LIMITE DE USO
 int motorLeftVel;
 int motorRightVel;
 int stopVel = 257;
 int throttle = 275;
 
 
+//CALCULO PARTE INTEGRATIVA DA ENTRADA
 double getIntegrative_error(){
   integrative_error += kI * ((error + prev_error)*(dt)/2 * 1/MILLISTOSECOND);
 
@@ -150,6 +173,7 @@ double getIntegrative_error(){
 }
 
 
+//CACULO DA PARTE DERIVATIVA DA ENTRADA
 double getDerivative_error(){
   double derivative = kD * (error - prev_error)/(dt);
   derivative *= MILLISTOSECOND;
@@ -159,95 +183,7 @@ double getDerivative_error(){
 
 
 
-
-
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(115200);
-  MPUconfigSetup();
-  CalibrarMPU();controlSpeed(motorLeftVel, 0);
-      controlSpeed(motorRightVel, 1);
-
-  Serial.printf("Começando...");
-  delay(2000);
-
-  setupPWM(250, 10, motorLeft, 0);
-	setupPWM(250, 10, motorRight, 1);
-
-  timer = millis();
-
-  while(millis() - timer <= 2000){
-    controlSpeed(stopVel, 0);
-    controlSpeed(stopVel, 1);
-  }
-
-  timer = millis();
-
-  while(millis() - timer <= 2000){
-    controlSpeed(throttle, 0);
-    controlSpeed(throttle, 1);
-  }
-
-
-
-
-
-}
-
-void loop() {
-  // put your main code here, to run repeatedly:
-  MPUgetSignalsLoop();
-
-  if(millis() - timer >= dt){
-
-  
-    prev_error = error;
-    error = ref - KalmanAngleRoll;
-    
-    double P = kP * error;
-    double I = getIntegrative_error();
-    double D = getDerivative_error();
-
-    
-    double U = P+I+D;
-
-    U *= K;
-
-    U = U - (gyro_const * RateRoll);
-
-
-    if(U > Ulimit) U = Ulimit;
-    else if(U < -Ulimit) U = -Ulimit;
-
-    double rpm; // = (U, -Ulimit, Ulimit, -RPMlimit, RPMlimit);
-
-    rpm = RPMlimit*((U + Ulimit)/Ulimit -1);
-
-
-    Serial.printf("U: %f, RPM: %f \n" , U, rpm);
-
-    motorLeftVel = throttle - rpm;
-    motorRightVel = throttle + rpm;
-
-    Serial.printf("Left: %d, Right: %d \n", motorLeftVel, motorRightVel);
-
-
-    if(!stop){
-      controlSpeed(motorLeftVel, 0);
-      controlSpeed(motorRightVel, 1);
-    }
-
-    timer = millis();
-
-
-    Serial.printf("Angle: %f, Rate: %f\n", KalmanAngleRoll, RateRoll);
-  }
-
-
-
-
-
-
+void pauseSystem(){
   if(Serial.available() > 0){
     stop = true;
 
@@ -257,6 +193,104 @@ void loop() {
     Serial.printf("Desliguei");
     delay(2000);
   }
+}
 
+void graphs(){
+  Serial.print("Angulo:");
+  Serial.print(KalmanAngleRoll);
+  Serial.print(",");
+  Serial.print("Velocidade Angular:");
+  Serial.println(RateRoll);
+}
+
+
+void setup() {
+  Serial.begin(115200);
+
+  MPUconfigSetup(); //CONFIGURANDO A MPU
+  CalibrarMPU();    //...
+
+  controlSpeed(motorLeftVel, 0);    //CONFIGURANDO OS MOTORES
+  controlSpeed(motorRightVel, 1);   //...
+
+  Serial.printf("Começando...");    //...
+  delay(2000);
+
+  setupPWM(250, 10, motorLeft, 0);  //...
+	setupPWM(250, 10, motorRight, 1); //...
+
+  timer = millis();
+
+  
+  while(millis() - timer <= 2000){     //LOOPS NECESSÁRIOS PARA INICIALIZAR OS MOTORES
+    controlSpeed(stopVel, 0);          //...
+    controlSpeed(stopVel, 1);          //...
+  }                                    //...
+                                       //...
+  timer = millis();                    //...
+                                       //...
+  while(millis() - timer <= 2000){     //...
+    controlSpeed(throttle, 0);         //...
+    controlSpeed(throttle, 1);         //...
+  }                                    //...
+
+
+}
+
+void loop() {
+  MPUgetSignalsLoop(); //FUNÇÃO PARA ATUALIZAR A POSIÇÃO ATUAL, DEVE SER UTILIZADA FORA DO LOOP DE CONTROLE
+                       //PARA GARANTIR UMA ATUALIZAÇÃO DE POSIÇÃO ATUAL PRECISA
+
+  if(millis() - timer >= dt){ //LOOP DE CONTROLE
+
+  
+    prev_error = error;
+    error = ref - KalmanAngleRoll;
+    
+    double P = kP * error;
+    double I = getIntegrative_error();
+    double D = getDerivative_error();
+
+    //CALCULO DE ENTRADA PARA O CONTROLADOR
+    double U = P+I+D;
+
+    U *= K;
+
+    U = U - (gyro_const * RateRoll);
+
+    //LIMITADOR DA ENTRADA, PARA IMPEDIR ENTRADAS QUE DANIFIQUEM O SISTEMA
+    if(U > Ulimit) U = Ulimit;
+    else if(U < -Ulimit) U = -Ulimit;
+
+    double rpm;                               // TRANSFORMANDO A ENTRADA DO SISTEMA EM UM SINAL DE PWM,
+    rpm = RPMlimit*((U + Ulimit)/Ulimit -1);  // FOI UTILIZADA UMA REGRA DE 3
+
+
+    //MONITORAMENTO DO SINAL DE ENTRADA E PWM
+    //Serial.printf("U: %f, RPM: %f \n" , U, rpm);
+
+    //SETANDO OS VALORES DE PWM NOS MOTORES
+    motorLeftVel = throttle - rpm;
+    motorRightVel = throttle + rpm;
+
+    //MONITORAMENTO DOS SINAL DE PWM NOS MOTORES
+    //Serial.printf("Left: %d, Right: %d \n", motorLeftVel, motorRightVel);
+
+
+    if(!stop){
+      controlSpeed(motorLeftVel, 0);
+      controlSpeed(motorRightVel, 1);
+    }
+
+    timer = millis();
+
+    //MONITORAMENTO DO ANGULO E VELORICDADE ANGULAR
+    //Serial.printf("Angle: %f, Rate: %f\n", KalmanAngleRoll, RateRoll);
+  }
+
+
+  graphs();
+
+  //pauseSystem();
 
 }
